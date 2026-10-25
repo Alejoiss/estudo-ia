@@ -1,0 +1,46 @@
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 48ccf63..2c9a544 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -59,7 +59,7 @@ Dependência entre módulos (sem ciclos; manter): `pets→tutores`; `agendamento
+ | Conflito: vet, status ∈ {agendado,concluido}, intervalo semiaberto `inicio<novo_fim AND fim>novo_inicio` (409); cancelados liberam | `agendamentos.criar` (SQL) |
+ | `fim = inicio + duracao` | `agendamentos.criar` |
+ | Listagem agendamentos: filtros `veterinario_id`, `data` (`substr(inicio,1,10)`), ordem `inicio,id` | `agendamentos.listar` |
+-| Cancelar: só `agendado` (409); `momento` opcional; ≥24h → `cancelado`, <24h → `cancelado_tardio` | `agendamentos.cancelar` |
++| Cancelar: só `agendado` (409); `momento` opcional; ≥12h → `cancelado`, <12h → `cancelado_tardio` + fatura de taxa 5000 (atendimento_id null) | `agendamentos.cancelar` |
+ | Atendimento: ordem 404 agendamento → 404 produtos → 409 status → 409 estoque | `atendimentos.registrar` |
+ | Estoque somado por produto repetido na lista antes de comparar | `atendimentos.registrar` (`usado`) |
+ | Atomicidade: validações antes de qualquer escrita; tudo na mesma conexão/transação | `atendimentos.registrar` + `db()` |
+diff --git a/agendamentos.py b/agendamentos.py
+index 64435c9..cdd45ff 100644
+--- a/agendamentos.py
++++ b/agendamentos.py
+@@ -5,12 +5,15 @@ from pydantic import BaseModel
+ 
+ from comum import Inteiro, erro, ou_404
+ from db import db, inserir, todos, um
++import faturas
+ import pets
+ import veterinarios
+ 
+ router = APIRouter(prefix="/agendamentos", tags=["agendamentos"])
+ 
+ FORMATO = "%Y-%m-%dT%H:%M"
++ANTECEDENCIA_CANCELAMENTO = timedelta(hours=12)
++TAXA_CANCELAMENTO_CENTAVOS = 5000
+ # weekday() -> (abre, fecha) em minutos desde 00:00; domingo (6) fechado.
+ EXPEDIENTE = {**{d: (8 * 60, 18 * 60) for d in range(5)}, 5: (8 * 60, 12 * 60)}
+ 
+@@ -96,6 +99,10 @@ def cancelar(id: int, body: CancelarIn | None = None):
+         if ag["status"] != "agendado":
+             erro(409, "só agendamentos com status agendado podem ser cancelados")
+         antecedencia = datetime.strptime(ag["inicio"], FORMATO) - momento
+-        status = "cancelado" if antecedencia >= timedelta(hours=24) else "cancelado_tardio"
+-        c.execute("UPDATE agendamentos SET status=? WHERE id=?", (status, id))
++        tardio = antecedencia < ANTECEDENCIA_CANCELAMENTO
++        c.execute("UPDATE agendamentos SET status=? WHERE id=?", ("cancelado_tardio" if tardio else "cancelado", id))
++        if tardio:
++            tutor_id = pets.buscar(c, ag["pet_id"])["tutor_id"]
++            fatura_id = inserir(c, "INSERT INTO faturas(tutor_id,atendimento_id,status) VALUES(?,NULL,'aberta')", tutor_id)
++            faturas.adicionar_item(c, fatura_id, "Taxa de cancelamento tardio", 1, TAXA_CANCELAMENTO_CENTAVOS)
+         return buscar(c, id)

@@ -1,0 +1,367 @@
+diff --git a/vetclinic/application.py b/vetclinic/application.py
+index cca4dda..ffcf74f 100644
+--- a/vetclinic/application.py
++++ b/vetclinic/application.py
+@@ -21,6 +21,7 @@ from vetclinic.routers import (
+     pets,
+     produtos,
+     tutores,
++    vacinas,
+     veterinarios,
+ )
+ 
+@@ -32,6 +33,7 @@ ROUTER_MODULES = (
+     agendamentos,
+     atendimentos,
+     faturas,
++    vacinas,
+ )
+ 
+ STATUS_CODE_BY_DOMAIN_ERROR: dict[type[DomainError], int] = {
+diff --git a/vetclinic/database.py b/vetclinic/database.py
+index 7b838dc..6015e7a 100644
+--- a/vetclinic/database.py
++++ b/vetclinic/database.py
+@@ -79,6 +79,17 @@ DATABASE_SCHEMA_STATEMENTS = (
+         status TEXT NOT NULL
+     )
+     """,
++    """
++    CREATE TABLE IF NOT EXISTS vacinas (
++        id INTEGER PRIMARY KEY AUTOINCREMENT,
++        pet_id INTEGER NOT NULL REFERENCES pets(id),
++        veterinario_id INTEGER NOT NULL REFERENCES veterinarios(id),
++        nome_vacina TEXT NOT NULL,
++        data_aplicacao TEXT NOT NULL,
++        intervalo_reforco_dias INTEGER NOT NULL,
++        data_reforco TEXT NOT NULL
++    )
++    """,
+     # O total da fatura não é armazenado: é sempre derivado dos itens.
+     """
+     CREATE TABLE IF NOT EXISTS fatura_itens (
+diff --git a/vetclinic/repositories/vacinas.py b/vetclinic/repositories/vacinas.py
+new file mode 100644
+index 0000000..b611505
+--- /dev/null
++++ b/vetclinic/repositories/vacinas.py
+@@ -0,0 +1,92 @@
++"""Persistência de vacinas."""
++
++import sqlite3
++
++from vetclinic.repositories import Row, row_to_dict
++
++
++def insert_vaccine(
++    connection: sqlite3.Connection,
++    pet_id: int,
++    veterinario_id: int,
++    nome_vacina: str,
++    data_aplicacao: str,
++    intervalo_reforco_dias: int,
++    data_reforco: str,
++) -> int:
++    """Insere uma vacina e devolve o id gerado."""
++    cursor = connection.execute(
++        "INSERT INTO vacinas (pet_id, veterinario_id, nome_vacina, data_aplicacao,"
++        " intervalo_reforco_dias, data_reforco) VALUES (?, ?, ?, ?, ?, ?)",
++        (
++            pet_id,
++            veterinario_id,
++            nome_vacina,
++            data_aplicacao,
++            intervalo_reforco_dias,
++            data_reforco,
++        ),
++    )
++    return int(cursor.lastrowid)
++
++
++def find_vaccine_by_id(connection: sqlite3.Connection, vaccine_id: int) -> Row | None:
++    """Busca uma vacina pelo id."""
++    return row_to_dict(
++        connection.execute("SELECT * FROM vacinas WHERE id = ?", (vaccine_id,)).fetchone()
++    )
++
++
++def list_vaccines_of_pet(connection: sqlite3.Connection, pet_id: int) -> list[Row]:
++    """Lista as vacinas de um pet por data de aplicação decrescente (empate: id crescente)."""
++    rows = connection.execute(
++        "SELECT * FROM vacinas WHERE pet_id = ? ORDER BY data_aplicacao DESC, id",
++        (pet_id,),
++    )
++    return [dict(row) for row in rows]
++
++
++def list_vaccines_with_booster_until(connection: sqlite3.Connection, until: str) -> list[Row]:
++    """Lista as vacinas com reforço até a data, por data de reforço crescente (empate: id)."""
++    rows = connection.execute(
++        "SELECT * FROM vacinas WHERE data_reforco <= ? ORDER BY data_reforco, id", (until,)
++    )
++    return [dict(row) for row in rows]
++
++
++def count_vaccines_of_pet(connection: sqlite3.Connection, pet_id: int) -> int:
++    """Conta as vacinas de um pet."""
++    return connection.execute(
++        "SELECT COUNT(*) FROM vacinas WHERE pet_id = ?", (pet_id,)
++    ).fetchone()[0]
++
++
++def update_vaccine(
++    connection: sqlite3.Connection,
++    vaccine_id: int,
++    pet_id: int,
++    veterinario_id: int,
++    nome_vacina: str,
++    data_aplicacao: str,
++    intervalo_reforco_dias: int,
++    data_reforco: str,
++) -> None:
++    """Substitui os dados de uma vacina."""
++    connection.execute(
++        "UPDATE vacinas SET pet_id = ?, veterinario_id = ?, nome_vacina = ?,"
++        " data_aplicacao = ?, intervalo_reforco_dias = ?, data_reforco = ? WHERE id = ?",
++        (
++            pet_id,
++            veterinario_id,
++            nome_vacina,
++            data_aplicacao,
++            intervalo_reforco_dias,
++            data_reforco,
++            vaccine_id,
++        ),
++    )
++
++
++def delete_vaccine(connection: sqlite3.Connection, vaccine_id: int) -> None:
++    """Remove uma vacina."""
++    connection.execute("DELETE FROM vacinas WHERE id = ?", (vaccine_id,))
+diff --git a/vetclinic/routers/pets.py b/vetclinic/routers/pets.py
+index 91921d5..5fa356c 100644
+--- a/vetclinic/routers/pets.py
++++ b/vetclinic/routers/pets.py
+@@ -4,7 +4,9 @@ from fastapi import APIRouter, Response, status
+ 
+ from vetclinic.routers import ConnectionDependency
+ from vetclinic.schemas.pets import PetInput, PetOutput
++from vetclinic.schemas.vacinas import VaccineOutput
+ from vetclinic.services import pets as pet_service
++from vetclinic.services import vacinas as vaccine_service
+ 
+ router = APIRouter(prefix="/pets", tags=["pets"])
+ 
+@@ -29,6 +31,12 @@ def replace_pet(pet_id: int, data: PetInput, connection: ConnectionDependency):
+ 
+ @router.delete("/{pet_id}", status_code=status.HTTP_204_NO_CONTENT)
+ def delete_pet(pet_id: int, connection: ConnectionDependency) -> Response:
+-    """Exclui um pet sem agendamentos."""
++    """Exclui um pet sem agendamentos nem vacinas."""
+     pet_service.delete_pet(connection, pet_id)
+     return Response(status_code=status.HTTP_204_NO_CONTENT)
++
++
++@router.get("/{pet_id}/vacinas", response_model=list[VaccineOutput])
++def list_vaccines_of_pet(pet_id: int, connection: ConnectionDependency):
++    """Lista as vacinas de um pet, da aplicação mais recente à mais antiga."""
++    return vaccine_service.list_vaccines_of_pet(connection, pet_id)
+diff --git a/vetclinic/routers/vacinas.py b/vetclinic/routers/vacinas.py
+new file mode 100644
+index 0000000..d7467c2
+--- /dev/null
++++ b/vetclinic/routers/vacinas.py
+@@ -0,0 +1,44 @@
++"""Rotas de vacinas."""
++
++from typing import Annotated
++
++from fastapi import APIRouter, Query, Response, status
++
++from vetclinic.routers import ConnectionDependency
++from vetclinic.schemas.vacinas import VaccineInput, VaccineOutput
++from vetclinic.services import vacinas as vaccine_service
++from vetclinic.validation import DateText
++
++router = APIRouter(prefix="/vacinas", tags=["vacinas"])
++
++
++@router.post("", response_model=VaccineOutput, status_code=status.HTTP_201_CREATED)
++def create_vaccine(data: VaccineInput, connection: ConnectionDependency):
++    """Registra uma vacina aplicada."""
++    return vaccine_service.create_vaccine(connection, data)
++
++
++# Declarada antes de "/{vaccine_id}" para que "reforcos-pendentes" não seja lido como id.
++@router.get("/reforcos-pendentes", response_model=list[VaccineOutput])
++def list_pending_boosters(ate: Annotated[DateText, Query()], connection: ConnectionDependency):
++    """Lista as vacinas com reforço previsto até a data informada."""
++    return vaccine_service.list_pending_boosters(connection, ate)
++
++
++@router.get("/{vaccine_id}", response_model=VaccineOutput)
++def get_vaccine(vaccine_id: int, connection: ConnectionDependency):
++    """Consulta uma vacina."""
++    return vaccine_service.get_vaccine_or_raise(connection, vaccine_id)
++
++
++@router.put("/{vaccine_id}", response_model=VaccineOutput)
++def replace_vaccine(vaccine_id: int, data: VaccineInput, connection: ConnectionDependency):
++    """Substitui os dados de uma vacina."""
++    return vaccine_service.replace_vaccine(connection, vaccine_id, data)
++
++
++@router.delete("/{vaccine_id}", status_code=status.HTTP_204_NO_CONTENT)
++def delete_vaccine(vaccine_id: int, connection: ConnectionDependency) -> Response:
++    """Exclui uma vacina."""
++    vaccine_service.delete_vaccine(connection, vaccine_id)
++    return Response(status_code=status.HTTP_204_NO_CONTENT)
+diff --git a/vetclinic/schemas/vacinas.py b/vetclinic/schemas/vacinas.py
+new file mode 100644
+index 0000000..3d53892
+--- /dev/null
++++ b/vetclinic/schemas/vacinas.py
+@@ -0,0 +1,27 @@
++"""Schemas de vacinas."""
++
++from pydantic import BaseModel
++
++from vetclinic.validation import (
++    NonBlankText,
++    PastOrPresentDateText,
++    PositiveInteger,
++    StrictInteger,
++)
++
++
++class VaccineInput(BaseModel):
++    """Corpo de criação e de substituição de uma vacina (`data_reforco` é calculada)."""
++
++    pet_id: StrictInteger
++    veterinario_id: StrictInteger
++    nome_vacina: NonBlankText
++    data_aplicacao: PastOrPresentDateText
++    intervalo_reforco_dias: PositiveInteger
++
++
++class VaccineOutput(VaccineInput):
++    """Vacina retornada pela API."""
++
++    id: int
++    data_reforco: str
+diff --git a/vetclinic/services/pets.py b/vetclinic/services/pets.py
+index 07d6afe..6df2012 100644
+--- a/vetclinic/services/pets.py
++++ b/vetclinic/services/pets.py
+@@ -6,11 +6,13 @@ from vetclinic.errors import ResourceNotFoundError, StateConflictError
+ from vetclinic.repositories import Row
+ from vetclinic.repositories import agendamentos as appointment_repository
+ from vetclinic.repositories import pets as pet_repository
++from vetclinic.repositories import vacinas as vaccine_repository
+ from vetclinic.schemas.pets import PetInput
+ from vetclinic.services.tutores import get_tutor_or_raise
+ 
+ PET_NOT_FOUND_MESSAGE = "Pet não encontrado"
+ PET_HAS_APPOINTMENTS_MESSAGE = "Pet possui agendamentos e não pode ser excluído"
++PET_HAS_VACCINES_MESSAGE = "Pet possui vacinas registradas e não pode ser excluído"
+ 
+ 
+ def get_pet_or_raise(connection: sqlite3.Connection, pet_id: int) -> Row:
+@@ -45,4 +47,6 @@ def delete_pet(connection: sqlite3.Connection, pet_id: int) -> None:
+     get_pet_or_raise(connection, pet_id)
+     if appointment_repository.count_appointments_of_pet(connection, pet_id) > 0:
+         raise StateConflictError(PET_HAS_APPOINTMENTS_MESSAGE)
++    if vaccine_repository.count_vaccines_of_pet(connection, pet_id) > 0:
++        raise StateConflictError(PET_HAS_VACCINES_MESSAGE)
+     pet_repository.delete_pet(connection, pet_id)
+diff --git a/vetclinic/services/vacinas.py b/vetclinic/services/vacinas.py
+new file mode 100644
+index 0000000..80206d9
+--- /dev/null
++++ b/vetclinic/services/vacinas.py
+@@ -0,0 +1,85 @@
++"""Regras de negócio de vacinas."""
++
++import sqlite3
++from datetime import timedelta
++
++from vetclinic.errors import InvalidDataError, ResourceNotFoundError
++from vetclinic.repositories import Row
++from vetclinic.repositories import vacinas as vaccine_repository
++from vetclinic.schemas.vacinas import VaccineInput
++from vetclinic.services.pets import get_pet_or_raise
++from vetclinic.services.veterinarios import get_veterinarian_or_raise
++from vetclinic.validation import parse_date_text
++
++VACCINE_NOT_FOUND_MESSAGE = "Vacina não encontrada"
++BOOSTER_DATE_OUT_OF_RANGE_MESSAGE = "A data de reforço calculada está fora do intervalo válido"
++
++
++def get_vaccine_or_raise(connection: sqlite3.Connection, vaccine_id: int) -> Row:
++    """Devolve a vacina ou levanta `ResourceNotFoundError`."""
++    vaccine = vaccine_repository.find_vaccine_by_id(connection, vaccine_id)
++    if vaccine is None:
++        raise ResourceNotFoundError(VACCINE_NOT_FOUND_MESSAGE)
++    return vaccine
++
++
++def _calculate_booster_date(data: VaccineInput) -> str:
++    """Soma o intervalo de reforço à data de aplicação."""
++    try:
++        booster = parse_date_text(data.data_aplicacao) + timedelta(
++            days=data.intervalo_reforco_dias
++        )
++    except OverflowError:
++        raise InvalidDataError(BOOSTER_DATE_OUT_OF_RANGE_MESSAGE) from None
++    return booster.isoformat()
++
++
++def create_vaccine(connection: sqlite3.Connection, data: VaccineInput) -> Row:
++    """Registra uma vacina de um pet existente, aplicada por um veterinário existente."""
++    get_pet_or_raise(connection, data.pet_id)
++    get_veterinarian_or_raise(connection, data.veterinario_id)
++    vaccine_id = vaccine_repository.insert_vaccine(
++        connection,
++        data.pet_id,
++        data.veterinario_id,
++        data.nome_vacina,
++        data.data_aplicacao,
++        data.intervalo_reforco_dias,
++        _calculate_booster_date(data),
++    )
++    return get_vaccine_or_raise(connection, vaccine_id)
++
++
++def replace_vaccine(connection: sqlite3.Connection, vaccine_id: int, data: VaccineInput) -> Row:
++    """Substitui os dados de uma vacina existente, recalculando a data de reforço."""
++    get_vaccine_or_raise(connection, vaccine_id)
++    get_pet_or_raise(connection, data.pet_id)
++    get_veterinarian_or_raise(connection, data.veterinario_id)
++    vaccine_repository.update_vaccine(
++        connection,
++        vaccine_id,
++        data.pet_id,
++        data.veterinario_id,
++        data.nome_vacina,
++        data.data_aplicacao,
++        data.intervalo_reforco_dias,
++        _calculate_booster_date(data),
++    )
++    return get_vaccine_or_raise(connection, vaccine_id)
++
++
++def delete_vaccine(connection: sqlite3.Connection, vaccine_id: int) -> None:
++    """Exclui uma vacina existente."""
++    get_vaccine_or_raise(connection, vaccine_id)
++    vaccine_repository.delete_vaccine(connection, vaccine_id)
++
++
++def list_vaccines_of_pet(connection: sqlite3.Connection, pet_id: int) -> list[Row]:
++    """Lista as vacinas de um pet existente."""
++    get_pet_or_raise(connection, pet_id)
++    return vaccine_repository.list_vaccines_of_pet(connection, pet_id)
++
++
++def list_pending_boosters(connection: sqlite3.Connection, until: str) -> list[Row]:
++    """Lista as vacinas cujo reforço vence até a data informada."""
++    return vaccine_repository.list_vaccines_with_booster_until(connection, until)

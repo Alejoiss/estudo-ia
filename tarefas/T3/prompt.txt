@@ -1,0 +1,15 @@
+Adicione um plano de fidelidade para tutores.
+
+Planos: "nenhum" (padrão para todo tutor), "prata" e "ouro".
+
+Rotas novas (o JSON do tutor em /tutores não muda):
+- GET /tutores/{id}/plano -> 200 {"tutor_id": <id>, "plano": "<plano>"}
+- PUT /tutores/{id}/plano com corpo {"plano": "<plano>"} -> 200 no mesmo formato.
+- Tutor inexistente -> 404. Plano inválido -> 422.
+
+Desconto na fatura de atendimento:
+- Aplicado apenas sobre o item "Consulta" (produtos não têm desconto): prata 10%, ouro 20%, arredondado para baixo em centavos.
+- O desconto é calculado no momento em que a fatura é gerada; mudar o plano depois não altera faturas já existentes.
+- Toda fatura passa a ter o campo desconto_centavos (0 quando não há desconto).
+- total_centavos = soma dos total_centavos dos itens - desconto_centavos. Os itens não mudam.
+- Itens adicionados depois por POST /faturas/{id}/itens não recebem desconto; o desconto original se mantém.

@@ -1,0 +1,142 @@
+diff --git a/atendimentos.py b/atendimentos.py
+index c2f43c9..4f4a42a 100644
+--- a/atendimentos.py
++++ b/atendimentos.py
+@@ -8,11 +8,13 @@ from db import db, inserir, um
+ import agendamentos
+ import faturas
+ import pets
++import tutores
+ import produtos
+ 
+ router = APIRouter(tags=["atendimentos"])
+ 
+ VALOR_CONSULTA_CENTAVOS = 15000
++DESCONTO_PERCENTUAL = {"nenhum": 0, "prata": 10, "ouro": 20}
+ 
+ 
+ class ProdutoUsado(BaseModel):
+@@ -52,7 +54,9 @@ def registrar(id: int, body: AtendimentoIn):
+         enviados = [p.model_dump() for p in body.produtos]
+         at_id = inserir(c, "INSERT INTO atendimentos(agendamento_id,anotacoes,produtos_json) VALUES(?,?,?)",
+                         id, body.anotacoes, json.dumps(enviados))
+-        fatura_id = inserir(c, "INSERT INTO faturas(tutor_id,atendimento_id,status) VALUES(?,?,'aberta')", tutor_id, at_id)
++        desconto = VALOR_CONSULTA_CENTAVOS * DESCONTO_PERCENTUAL[tutores.plano_de(c, tutor_id)] // 100
++        fatura_id = inserir(c, "INSERT INTO faturas(tutor_id,atendimento_id,status,desconto_centavos) VALUES(?,?,'aberta',?)",
++                            tutor_id, at_id, desconto)
+         faturas.adicionar_item(c, fatura_id, "Consulta", 1, VALOR_CONSULTA_CENTAVOS)
+         for p in body.produtos:
+             pr = prods[p.produto_id]
+diff --git a/db.py b/db.py
+index ced90f5..76215b8 100644
+--- a/db.py
++++ b/db.py
+@@ -3,7 +3,8 @@ import sqlite3
+ from contextlib import contextmanager
+ 
+ SCHEMA = """
+-CREATE TABLE IF NOT EXISTS tutores (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, email TEXT NOT NULL, telefone TEXT);
++CREATE TABLE IF NOT EXISTS tutores (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, email TEXT NOT NULL, telefone TEXT,
++    plano TEXT NOT NULL DEFAULT 'nenhum');
+ CREATE TABLE IF NOT EXISTS pets (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, especie TEXT NOT NULL,
+     tutor_id INTEGER NOT NULL REFERENCES tutores(id), data_nascimento TEXT);
+ CREATE TABLE IF NOT EXISTS veterinarios (id INTEGER PRIMARY KEY AUTOINCREMENT, nome TEXT NOT NULL, crmv TEXT NOT NULL UNIQUE);
+@@ -15,7 +16,8 @@ CREATE TABLE IF NOT EXISTS agendamentos (id INTEGER PRIMARY KEY AUTOINCREMENT, p
+ CREATE TABLE IF NOT EXISTS atendimentos (id INTEGER PRIMARY KEY AUTOINCREMENT, agendamento_id INTEGER NOT NULL REFERENCES agendamentos(id),
+     anotacoes TEXT NOT NULL, produtos_json TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS faturas (id INTEGER PRIMARY KEY AUTOINCREMENT, tutor_id INTEGER NOT NULL REFERENCES tutores(id),
+-    atendimento_id INTEGER, status TEXT NOT NULL);
++    atendimento_id INTEGER, status TEXT NOT NULL,
++    desconto_centavos INTEGER NOT NULL DEFAULT 0);
+ CREATE TABLE IF NOT EXISTS fatura_itens (id INTEGER PRIMARY KEY AUTOINCREMENT, fatura_id INTEGER NOT NULL REFERENCES faturas(id),
+     descricao TEXT NOT NULL, quantidade INTEGER NOT NULL, valor_unitario_centavos INTEGER NOT NULL);
+ """
+@@ -39,6 +41,11 @@ def db():
+ def iniciar():
+     with db() as c:
+         c.executescript(SCHEMA)
++        # Bancos criados antes dos planos de fidelidade não têm estas colunas.
++        for tabela, coluna, definicao in (("tutores", "plano", "TEXT NOT NULL DEFAULT 'nenhum'"),
++                                          ("faturas", "desconto_centavos", "INTEGER NOT NULL DEFAULT 0")):
++            if coluna not in [r["name"] for r in c.execute(f"PRAGMA table_info({tabela})")]:
++                c.execute(f"ALTER TABLE {tabela} ADD COLUMN {coluna} {definicao}")
+ 
+ 
+ def um(c, sql, *args):
+diff --git a/faturas.py b/faturas.py
+index d47990f..1489071 100644
+--- a/faturas.py
++++ b/faturas.py
+@@ -19,13 +19,13 @@ def adicionar_item(c, fatura_id, descricao, quantidade, valor_unitario_centavos)
+ 
+ 
+ def montar(c, id):
+-    """Fatura com itens e total calculados."""
++    """Fatura com itens e total (já descontado) calculados."""
+     f = ou_404(um(c, "SELECT * FROM faturas WHERE id=?", id), "fatura")
+     itens = todos(c, "SELECT descricao,quantidade,valor_unitario_centavos FROM fatura_itens WHERE fatura_id=? ORDER BY id", id)
+     for i in itens:
+         i["total_centavos"] = i["quantidade"] * i["valor_unitario_centavos"]
+     f["itens"] = itens
+-    f["total_centavos"] = sum(i["total_centavos"] for i in itens)
++    f["total_centavos"] = sum(i["total_centavos"] for i in itens) - f["desconto_centavos"]
+     return f
+ 
+ 
+diff --git a/tutores.py b/tutores.py
+index d668159..f3d35a0 100644
+--- a/tutores.py
++++ b/tutores.py
+@@ -1,4 +1,6 @@
+ from fastapi import APIRouter, Response
++from typing import Literal
++
+ from pydantic import BaseModel, field_validator
+ 
+ from comum import Texto, erro, ou_404
+@@ -21,8 +23,16 @@ class TutorIn(BaseModel):
+         return v
+ 
+ 
++class PlanoIn(BaseModel):
++    plano: Literal["nenhum", "prata", "ouro"]
++
++
+ def buscar(c, id):
+-    return ou_404(um(c, "SELECT * FROM tutores WHERE id=?", id), "tutor")
++    return ou_404(um(c, "SELECT id,nome,email,telefone FROM tutores WHERE id=?", id), "tutor")
++
++
++def plano_de(c, id):
++    return um(c, "SELECT plano FROM tutores WHERE id=?", id)["plano"]
+ 
+ 
+ @router.post("", status_code=201)
+@@ -35,7 +45,7 @@ def criar(body: TutorIn):
+ @router.get("")
+ def listar():
+     with db() as c:
+-        return todos(c, "SELECT * FROM tutores ORDER BY id")
++        return todos(c, "SELECT id,nome,email,telefone FROM tutores ORDER BY id")
+ 
+ 
+ @router.get("/{id}")
+@@ -75,3 +85,18 @@ def faturas_do_tutor(id: int):
+         buscar(c, id)
+         ids = [r["id"] for r in todos(c, "SELECT id FROM faturas WHERE tutor_id=? ORDER BY id", id)]
+         return [faturas.montar(c, i) for i in ids]
++
++
++@router.get("/{id}/plano")
++def obter_plano(id: int):
++    with db() as c:
++        buscar(c, id)
++        return {"tutor_id": id, "plano": plano_de(c, id)}
++
++
++@router.put("/{id}/plano")
++def atualizar_plano(id: int, body: PlanoIn):
++    with db() as c:
++        buscar(c, id)
++        c.execute("UPDATE tutores SET plano=? WHERE id=?", (body.plano, id))
++        return {"tutor_id": id, "plano": body.plano}

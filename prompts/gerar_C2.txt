@@ -1,0 +1,20 @@
+Você vai implementar do zero a API descrita em SPEC.md, neste repositório.
+
+Restrições obrigatórias:
+- Siga SPEC.md à risca: rotas, campos, códigos de status e regras de negócio.
+- Python 3.12, FastAPI e sqlite3 da biblioteca padrão. Use apenas as dependências de requirements.txt; não instale nada.
+- main.py na raiz deve expor o objeto FastAPI como `app`.
+- Não altere SPEC.md, run.sh, test.sh, requirements.txt nem nada em tests/acceptance/.
+- Não crie testes além dos existentes, nem README ou outra documentação fora do código.
+- Valide com ./test.sh. O trabalho só termina quando todos os testes passarem.
+
+Estilo de código:
+Escreva o código otimizado para ser lido, entendido e modificado por um LLM, não por humanos:
+- Minimize o total de tokens do projeto sem alterar o comportamento.
+- Sem comentários e sem docstrings.
+- Identificadores curtos, porém consistentes e sem ambiguidade (mesmo nome para o mesmo conceito em todo o projeto). Não use nomes de uma letra fora de laços e lambdas.
+- Mínimo de indireção: sem classes quando funções bastam, sem camadas redundantes, sem padrões de projeto, sem herança.
+- Mantenha a lógica relacionada em blocos contíguos, de modo que o contexto necessário para entender ou alterar uma funcionalidade esteja próximo no texto.
+- Use o menor número de arquivos que preserve essa coesão.
+- Não ofusque: nada de truques de sintaxe que economizem tokens à custa de clareza semântica.
+- Priorize densidade de informação por token e facilidade de modificação por IA acima de legibilidade humana.

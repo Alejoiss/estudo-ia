@@ -1,0 +1,13 @@
+diff --git a/agendamentos.py b/agendamentos.py
+index 2ff6d61..64435c9 100644
+--- a/agendamentos.py
++++ b/agendamentos.py
+@@ -60,7 +60,7 @@ def criar(body: AgendamentoIn):
+             erro(422, "fora do horário de funcionamento")
+         i, f = inicio.strftime(FORMATO), fim.strftime(FORMATO)
+         if um(c, "SELECT 1 FROM agendamentos WHERE veterinario_id=? AND status IN ('agendado','concluido')"
+-                 " AND inicio <= ? AND fim >= ?", body.veterinario_id, f, i):
++                 " AND inicio < ? AND fim > ?", body.veterinario_id, f, i):
+             erro(409, "veterinário já possui agendamento neste horário")
+         id = inserir(c, "INSERT INTO agendamentos(pet_id,veterinario_id,inicio,fim,duracao_minutos,status)"
+                         " VALUES(?,?,?,?,?,'agendado')", body.pet_id, body.veterinario_id, i, f, body.duracao_minutos)

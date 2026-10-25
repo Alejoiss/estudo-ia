@@ -1,0 +1,138 @@
+diff --git a/db.py b/db.py
+index ced90f5..c2d39c0 100644
+--- a/db.py
++++ b/db.py
+@@ -18,6 +18,9 @@ CREATE TABLE IF NOT EXISTS faturas (id INTEGER PRIMARY KEY AUTOINCREMENT, tutor_
+     atendimento_id INTEGER, status TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS fatura_itens (id INTEGER PRIMARY KEY AUTOINCREMENT, fatura_id INTEGER NOT NULL REFERENCES faturas(id),
+     descricao TEXT NOT NULL, quantidade INTEGER NOT NULL, valor_unitario_centavos INTEGER NOT NULL);
++CREATE TABLE IF NOT EXISTS vacinas (id INTEGER PRIMARY KEY AUTOINCREMENT, pet_id INTEGER NOT NULL REFERENCES pets(id),
++    veterinario_id INTEGER NOT NULL REFERENCES veterinarios(id), nome_vacina TEXT NOT NULL, data_aplicacao TEXT NOT NULL,
++    intervalo_reforco_dias INTEGER NOT NULL, data_reforco TEXT NOT NULL);
+ """
+ 
+ 
+diff --git a/main.py b/main.py
+index c59ff3e..a9c35e5 100644
+--- a/main.py
++++ b/main.py
+@@ -9,6 +9,7 @@ import faturas
+ import pets
+ import produtos
+ import tutores
++import vacinas
+ import veterinarios
+ 
+ 
+@@ -19,5 +20,5 @@ async def lifespan(_):
+ 
+ 
+ app = FastAPI(title="VetClinic API", lifespan=lifespan)
+-for modulo in (tutores, pets, veterinarios, produtos, agendamentos, atendimentos, faturas):
++for modulo in (tutores, pets, veterinarios, produtos, agendamentos, atendimentos, faturas, vacinas):
+     app.include_router(modulo.router)
+diff --git a/pets.py b/pets.py
+index 22a203b..a3bc68e 100644
+--- a/pets.py
++++ b/pets.py
+@@ -63,5 +63,7 @@ def remover(id: int):
+         buscar(c, id)
+         if um(c, "SELECT 1 FROM agendamentos WHERE pet_id=?", id):
+             erro(409, "pet possui agendamentos")
++        if um(c, "SELECT 1 FROM vacinas WHERE pet_id=?", id):
++            erro(409, "pet possui vacinas")
+         c.execute("DELETE FROM pets WHERE id=?", (id,))
+     return Response(status_code=204)
+diff --git a/vacinas.py b/vacinas.py
+new file mode 100644
+index 0000000..73ad731
+--- /dev/null
++++ b/vacinas.py
+@@ -0,0 +1,87 @@
++from datetime import date, timedelta
++
++from fastapi import APIRouter, Response
++from pydantic import BaseModel, field_validator
++
++from comum import InteiroPositivo, Texto, erro, ou_404
++from db import db, inserir, todos, um
++import pets
++import veterinarios
++
++router = APIRouter(tags=["vacinas"])
++
++
++class VacinaIn(BaseModel):
++    pet_id: InteiroPositivo
++    veterinario_id: InteiroPositivo
++    nome_vacina: Texto
++    data_aplicacao: date
++    intervalo_reforco_dias: InteiroPositivo
++
++    @field_validator("data_aplicacao")
++    @classmethod
++    def _nao_futura(cls, v):
++        if v > date.today():
++            raise ValueError("data_aplicacao não pode ser futura")
++        return v
++
++
++def buscar(c, id):
++    return ou_404(um(c, "SELECT * FROM vacinas WHERE id=?", id), "vacina")
++
++
++def valores(body: VacinaIn):
++    try:
++        reforco = body.data_aplicacao + timedelta(days=body.intervalo_reforco_dias)
++    except OverflowError:
++        erro(422, "intervalo_reforco_dias fora da faixa")
++    return (body.pet_id, body.veterinario_id, body.nome_vacina, body.data_aplicacao.isoformat(),
++            body.intervalo_reforco_dias, reforco.isoformat())
++
++
++@router.post("/vacinas", status_code=201)
++def criar(body: VacinaIn):
++    with db() as c:
++        pets.buscar(c, body.pet_id)
++        veterinarios.buscar(c, body.veterinario_id)
++        id = inserir(c, "INSERT INTO vacinas(pet_id,veterinario_id,nome_vacina,data_aplicacao,"
++                        "intervalo_reforco_dias,data_reforco) VALUES(?,?,?,?,?,?)", *valores(body))
++        return buscar(c, id)
++
++
++@router.get("/vacinas/reforcos-pendentes")
++def reforcos_pendentes(ate: date):
++    with db() as c:
++        return todos(c, "SELECT * FROM vacinas WHERE data_reforco<=? ORDER BY data_reforco, id", ate.isoformat())
++
++
++@router.get("/vacinas/{id}")
++def obter(id: int):
++    with db() as c:
++        return buscar(c, id)
++
++
++@router.put("/vacinas/{id}")
++def atualizar(id: int, body: VacinaIn):
++    with db() as c:
++        buscar(c, id)
++        pets.buscar(c, body.pet_id)
++        veterinarios.buscar(c, body.veterinario_id)
++        c.execute("UPDATE vacinas SET pet_id=?,veterinario_id=?,nome_vacina=?,data_aplicacao=?,"
++                  "intervalo_reforco_dias=?,data_reforco=? WHERE id=?", (*valores(body), id))
++        return buscar(c, id)
++
++
++@router.delete("/vacinas/{id}", status_code=204)
++def remover(id: int):
++    with db() as c:
++        buscar(c, id)
++        c.execute("DELETE FROM vacinas WHERE id=?", (id,))
++    return Response(status_code=204)
++
++
++@router.get("/pets/{pet_id}/vacinas")
++def listar_do_pet(pet_id: int):
++    with db() as c:
++        pets.buscar(c, pet_id)
++        return todos(c, "SELECT * FROM vacinas WHERE pet_id=? ORDER BY data_aplicacao DESC, id", pet_id)

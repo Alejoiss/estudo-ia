@@ -1,0 +1,4 @@
+Escreva a documentação deste projeto para um desenvolvedor humano que acabou de entrar na equipe.
+Inclua: visão geral do domínio, arquitetura e responsabilidade de cada parte do código, como rodar e testar, fluxo de uma requisição típica, regras de negócio e onde cada uma está implementada, e como adicionar uma nova entidade.
+Use prosa clara, títulos e exemplos. Não altere nenhum arquivo.
+Responda apenas com o conteúdo do documento em Markdown, sem introdução nem comentários antes ou depois.

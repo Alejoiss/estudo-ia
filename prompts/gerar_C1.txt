@@ -1,0 +1,20 @@
+Você vai implementar do zero a API descrita em SPEC.md, neste repositório.
+
+Restrições obrigatórias:
+- Siga SPEC.md à risca: rotas, campos, códigos de status e regras de negócio.
+- Python 3.12, FastAPI e sqlite3 da biblioteca padrão. Use apenas as dependências de requirements.txt; não instale nada.
+- main.py na raiz deve expor o objeto FastAPI como `app`.
+- Não altere SPEC.md, run.sh, test.sh, requirements.txt nem nada em tests/acceptance/.
+- Não crie testes além dos existentes, nem README ou outra documentação fora do código.
+- Valide com ./test.sh. O trabalho só termina quando todos os testes passarem.
+
+Estilo de código:
+Escreva como um projeto profissional mantido por uma equipe grande de desenvolvedores humanos:
+- Siga PEP 8, Clean Code e princípios SOLID.
+- Separe em camadas/módulos (rotas/handlers, serviços, repositório, modelos, validação, config).
+- Nomes longos, descritivos e autoexplicativos para variáveis, funções e classes.
+- Type hints completos e docstrings em todas as funções e classes públicas.
+- Comentários explicando decisões não óbvias.
+- Constantes nomeadas no lugar de valores mágicos.
+- Funções pequenas com responsabilidade única; tratamento de erros explícito.
+- Priorize legibilidade e manutenibilidade por humanos acima de qualquer outra consideração.

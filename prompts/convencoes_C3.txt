@@ -1,0 +1,11 @@
+Vou organizar o projeto em um módulo por recurso, cada um reunindo schema, SQL e rotas sem camadas intermediárias, com db.py cuidando da conexão/transação e comum.py centralizando tipos e erros — mantendo nomes em português, datas como texto ISO e comentários só para regras de negócio não óbvias. · summary
+
+A API está implementada e ./test.sh passa: 37 testes, nenhuma falha.
+
+Estrutura (na raiz do repositório):
+- main.py expõe app, cria as tabelas na inicialização e monta os routers.
+- db.py guarda o schema, a conexão por requisição e os helpers de SQL.
+- comum.py tem os tipos validados e o helper de erros.
+- Um módulo por recurso: tutores.py, pets.py, veterinarios.py, produtos.py, agendamentos.py, atendimentos.py e faturas.py.
+
+Convenções: são as oito listadas antes do código. O .server.log que o test.sh gera na raiz não foi apagado.

@@ -1,0 +1,32 @@
+diff --git a/agendamentos.py b/agendamentos.py
+index 64435c9..309aa6f 100644
+--- a/agendamentos.py
++++ b/agendamentos.py
+@@ -5,6 +5,7 @@ from pydantic import BaseModel
+ 
+ from comum import Inteiro, erro, ou_404
+ from db import db, inserir, todos, um
++import faturas
+ import pets
+ import veterinarios
+ 
+@@ -12,6 +13,7 @@ router = APIRouter(prefix="/agendamentos", tags=["agendamentos"])
+ 
+ FORMATO = "%Y-%m-%dT%H:%M"
+ # weekday() -> (abre, fecha) em minutos desde 00:00; domingo (6) fechado.
++TAXA_CANCELAMENTO_CENTAVOS = 5000
+ EXPEDIENTE = {**{d: (8 * 60, 18 * 60) for d in range(5)}, 5: (8 * 60, 12 * 60)}
+ 
+ 
+@@ -96,6 +98,10 @@ def cancelar(id: int, body: CancelarIn | None = None):
+         if ag["status"] != "agendado":
+             erro(409, "só agendamentos com status agendado podem ser cancelados")
+         antecedencia = datetime.strptime(ag["inicio"], FORMATO) - momento
+-        status = "cancelado" if antecedencia >= timedelta(hours=24) else "cancelado_tardio"
++        status = "cancelado" if antecedencia >= timedelta(hours=12) else "cancelado_tardio"
++        if status == "cancelado_tardio":
++            tutor_id = pets.buscar(c, ag["pet_id"])["tutor_id"]
++            fatura_id = inserir(c, "INSERT INTO faturas(tutor_id,atendimento_id,status) VALUES(?,NULL,'aberta')", tutor_id)
++            faturas.adicionar_item(c, fatura_id, "Taxa de cancelamento tardio", 1, TAXA_CANCELAMENTO_CENTAVOS)
+         c.execute("UPDATE agendamentos SET status=? WHERE id=?", (status, id))
+         return buscar(c, id)

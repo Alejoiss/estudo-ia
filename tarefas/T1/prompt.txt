@@ -1,0 +1,16 @@
+Crie o cadastro de vacinas aplicadas em pets.
+
+Campos da vacina: id, pet_id, veterinario_id, nome_vacina (obrigatório, não vazio), data_aplicacao ("YYYY-MM-DD", não pode ser futura), intervalo_reforco_dias (inteiro > 0) e data_reforco.
+data_reforco é calculada pelo sistema: data_aplicacao + intervalo_reforco_dias. Não é enviada pelo cliente.
+
+Rotas:
+- POST /vacinas -> 201 com a vacina criada.
+- GET /vacinas/{id} -> 200.
+- PUT /vacinas/{id} -> 200, mesmo corpo do POST; recalcula data_reforco.
+- DELETE /vacinas/{id} -> 204.
+- GET /pets/{pet_id}/vacinas -> 200, vacinas do pet ordenadas por data_aplicacao decrescente (empate: id crescente).
+- GET /vacinas/reforcos-pendentes?ate=YYYY-MM-DD -> 200, vacinas com data_reforco <= ate, ordenadas por data_reforco crescente (empate: id crescente). O parâmetro ate é obrigatório.
+
+Erros: vacina, pet ou veterinário inexistente -> 404. Dados inválidos -> 422.
+
+Nova regra: um pet que tenha vacinas registradas não pode ser excluído (DELETE /pets/{id} -> 409).

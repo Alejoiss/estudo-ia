@@ -1,0 +1,5 @@
+Escreva um arquivo de contexto (CLAUDE.md) para um agente de IA que vai modificar este projeto.
+Objetivo: o agente deve conseguir localizar e alterar qualquer funcionalidade lendo o mínimo de código.
+Inclua, no formato mais denso possível: mapa arquivo -> responsabilidade e símbolos principais, esquema do banco, invariantes e regras de negócio com o local exato de cada uma, convenções a seguir em código novo, comandos de execução e teste.
+Sem prosa explicativa. Não altere nenhum arquivo.
+Responda apenas com o conteúdo do arquivo em Markdown, sem introdução nem comentários antes ou depois.

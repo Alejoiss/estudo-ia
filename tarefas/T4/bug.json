@@ -1,0 +1,5 @@
+{
+  "C1": ["vetclinic/repositories/agendamentos.py", "\" AND inicio < ? AND fim > ? LIMIT 1\"", "\" AND inicio <= ? AND fim >= ? LIMIT 1\""],
+  "C2": ["main.py", "and inicio<? and fim>?\"", "and inicio<=? and fim>=?\""],
+  "C3": ["agendamentos.py", "\" AND inicio < ? AND fim > ?\"", "\" AND inicio <= ? AND fim >= ?\""]
+}

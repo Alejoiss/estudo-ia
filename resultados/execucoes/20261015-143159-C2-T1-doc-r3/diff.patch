@@ -1,0 +1,82 @@
+diff --git a/main.py b/main.py
+index 9438b97..1d1e09f 100644
+--- a/main.py
++++ b/main.py
+@@ -14,6 +14,7 @@ create table if not exists produtos(id integer primary key autoincrement, nome,
+ create table if not exists agendamentos(id integer primary key autoincrement, pet_id, veterinario_id, inicio, fim, duracao_minutos, status);
+ create table if not exists atendimentos(id integer primary key autoincrement, agendamento_id, anotacoes, produtos, fatura_id);
+ create table if not exists faturas(id integer primary key autoincrement, tutor_id, atendimento_id, status, itens);
++create table if not exists vacinas(id integer primary key autoincrement, pet_id, veterinario_id, nome_vacina, data_aplicacao, intervalo_reforco_dias, data_reforco);
+ """)
+ app = FastAPI()
+ DT = "%Y-%m-%dT%H:%M"
+@@ -134,6 +135,14 @@ class AtendIn(BaseModel):
+     produtos: list[UsoIn]
+ 
+ 
++class VacinaIn(BaseModel):
++    pet_id: StrictInt
++    veterinario_id: StrictInt
++    nome_vacina: Str
++    data_aplicacao: Annotated[Day, AfterValidator(not_future)]
++    intervalo_reforco_dias: Qty
++
++
+ class ItemIn(BaseModel):
+     descricao: Str
+     quantidade: Qty
+@@ -205,6 +214,8 @@ async def delete_pet(id: int):
+     get("pets", id)
+     if db.execute("select 1 from agendamentos where pet_id=?", (id,)).fetchone():
+         err(409, "pet possui agendamentos")
++    if db.execute("select 1 from vacinas where pet_id=?", (id,)).fetchone():
++        err(409, "pet possui vacinas")
+     db.execute("delete from pets where id=?", (id,))
+     db.commit()
+     return Response(status_code=204)
+@@ -375,3 +386,45 @@ async def pay_fatura(id: int):
+     if get("faturas", id)["status"] == "paga":
+         err(409, "fatura ja paga")
+     return fatura(update("faturas", id, {"status": "paga"}))
++
++
++def vacina_data(body):
++    get("pets", body.pet_id)
++    get("veterinarios", body.veterinario_id)
++    reforco = datetime.strptime(body.data_aplicacao, "%Y-%m-%d") + timedelta(days=body.intervalo_reforco_dias)
++    return {**body.model_dump(), "data_reforco": reforco.strftime("%Y-%m-%d")}
++
++
++@app.post("/vacinas", status_code=201)
++async def create_vacina(body: VacinaIn):
++    return insert("vacinas", vacina_data(body))
++
++
++@app.get("/vacinas/reforcos-pendentes")
++async def reforcos_pendentes(ate: Day):
++    return [dict(row) for row in db.execute("select * from vacinas where data_reforco<=? order by data_reforco, id", (ate,))]
++
++
++@app.get("/vacinas/{id}")
++async def read_vacina(id: int):
++    return get("vacinas", id)
++
++
++@app.put("/vacinas/{id}")
++async def put_vacina(id: int, body: VacinaIn):
++    get("vacinas", id)
++    return update("vacinas", id, vacina_data(body))
++
++
++@app.delete("/vacinas/{id}", status_code=204)
++async def delete_vacina(id: int):
++    get("vacinas", id)
++    db.execute("delete from vacinas where id=?", (id,))
++    db.commit()
++    return Response(status_code=204)
++
++
++@app.get("/pets/{pet_id}/vacinas")
++async def pet_vacinas(pet_id: int):
++    get("pets", pet_id)
++    return [dict(row) for row in db.execute("select * from vacinas where pet_id=? order by data_aplicacao desc, id", (pet_id,))]

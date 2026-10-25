@@ -1,0 +1,4 @@
+Relato de um usuário da clínica:
+"Não consigo agendar uma consulta às 10:30 para a Dra. Ana, mesmo ela tendo uma consulta que termina exatamente às 10:30. O sistema responde que o horário está ocupado."
+
+Encontre a causa e corrija.

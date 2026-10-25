@@ -1,0 +1,91 @@
+diff --git a/vetclinic/config.py b/vetclinic/config.py
+index 61a9730..48807f8 100644
+--- a/vetclinic/config.py
++++ b/vetclinic/config.py
+@@ -19,6 +19,10 @@ DATETIME_PATTERN = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$"
+ CONSULTATION_DESCRIPTION = "Consulta"
+ CONSULTATION_PRICE_IN_CENTS = 15000
+ 
++# Taxa cobrada em fatura própria quando o cancelamento é tardio.
++LATE_CANCELLATION_FEE_DESCRIPTION = "Taxa de cancelamento tardio"
++LATE_CANCELLATION_FEE_IN_CENTS = 5000
++
+ 
+ @dataclass(frozen=True)
+ class Settings:
+diff --git a/vetclinic/services/agendamentos.py b/vetclinic/services/agendamentos.py
+index a6e365a..0731d6e 100644
+--- a/vetclinic/services/agendamentos.py
++++ b/vetclinic/services/agendamentos.py
+@@ -8,6 +8,7 @@ from vetclinic.errors import InvalidDataError, ResourceNotFoundError, StateConfl
+ from vetclinic.repositories import Row
+ from vetclinic.repositories import agendamentos as appointment_repository
+ from vetclinic.schemas.agendamentos import AppointmentInput
++from vetclinic.services.faturas import create_invoice_for_late_cancellation
+ from vetclinic.services.pets import get_pet_or_raise
+ from vetclinic.services.veterinarios import get_veterinarian_or_raise
+ from vetclinic.validation import format_datetime, parse_datetime_text
+@@ -25,7 +26,7 @@ MINIMUM_DURATION_MINUTES = 15
+ MAXIMUM_DURATION_MINUTES = 120
+ 
+ # Cancelar com menos antecedência que isto é considerado cancelamento tardio.
+-LATE_CANCELLATION_THRESHOLD = timedelta(hours=24)
++LATE_CANCELLATION_THRESHOLD = timedelta(hours=12)
+ 
+ # Expediente por dia da semana (`datetime.weekday()`: segunda=0 ... domingo=6).
+ # Dias ausentes do mapa estão fechados.
+@@ -121,7 +122,7 @@ def list_appointments(
+ def cancel_appointment(
+     connection: sqlite3.Connection, appointment_id: int, cancellation_moment_text: str | None
+ ) -> Row:
+-    """Cancela um agendamento, classificando como tardio se faltar menos de 24 horas."""
++    """Cancela um agendamento, classificando como tardio se faltar menos de 12 horas."""
+     cancellation_moment = (
+         parse_datetime_text(cancellation_moment_text)
+         if cancellation_moment_text is not None
+@@ -137,4 +138,7 @@ def cancel_appointment(
+             appointment_id,
+             STATUS_LATE_CANCELLED if is_late else STATUS_CANCELLED,
+         )
++        if is_late:
++            tutor_id = get_pet_or_raise(connection, appointment["pet_id"])["tutor_id"]
++            create_invoice_for_late_cancellation(connection, tutor_id)
+     return get_appointment_or_raise(connection, appointment_id)
+diff --git a/vetclinic/services/faturas.py b/vetclinic/services/faturas.py
+index 8ee12cf..1211104 100644
+--- a/vetclinic/services/faturas.py
++++ b/vetclinic/services/faturas.py
+@@ -2,7 +2,12 @@
+ 
+ import sqlite3
+ 
+-from vetclinic.config import CONSULTATION_DESCRIPTION, CONSULTATION_PRICE_IN_CENTS
++from vetclinic.config import (
++    CONSULTATION_DESCRIPTION,
++    CONSULTATION_PRICE_IN_CENTS,
++    LATE_CANCELLATION_FEE_DESCRIPTION,
++    LATE_CANCELLATION_FEE_IN_CENTS,
++)
+ from vetclinic.database import transaction
+ from vetclinic.errors import ResourceNotFoundError, StateConflictError
+ from vetclinic.repositories import Row
+@@ -30,6 +35,19 @@ def build_consultation_item() -> Row:
+     return build_invoice_item(CONSULTATION_DESCRIPTION, 1, CONSULTATION_PRICE_IN_CENTS)
+ 
+ 
++def create_invoice_for_late_cancellation(connection: sqlite3.Connection, tutor_id: int) -> int:
++    """Cria a fatura aberta da taxa de cancelamento tardio, sem atendimento associado.
++
++    Deve rodar dentro da transação do chamador.
++    """
++    fee_item = build_invoice_item(
++        LATE_CANCELLATION_FEE_DESCRIPTION, 1, LATE_CANCELLATION_FEE_IN_CENTS
++    )
++    return invoice_repository.insert_invoice(
++        connection, tutor_id, None, INVOICE_STATUS_OPEN, [fee_item]
++    )
++
++
+ def add_totals_to_invoice(invoice: Row) -> Row:
+     """Devolve a fatura com o total de cada item e o total geral calculados."""
+     items_with_totals = [

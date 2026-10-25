@@ -1,0 +1,13 @@
+diff --git a/vetclinic/repositories/agendamentos.py b/vetclinic/repositories/agendamentos.py
+index 542c05d..41f0a55 100644
+--- a/vetclinic/repositories/agendamentos.py
++++ b/vetclinic/repositories/agendamentos.py
+@@ -70,7 +70,7 @@ def exists_overlapping_appointment(
+     placeholders = ", ".join("?" for _ in blocking_statuses)
+     row = connection.execute(
+         f"SELECT 1 FROM agendamentos WHERE veterinario_id = ? AND status IN ({placeholders})"
+-        " AND inicio <= ? AND fim >= ? LIMIT 1",
++        " AND inicio < ? AND fim > ? LIMIT 1",
+         (veterinarian_id, *blocking_statuses, end_text, start_text),
+     ).fetchone()
+     return row is not None

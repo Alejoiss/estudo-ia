@@ -1,0 +1,273 @@
+diff --git a/vetclinic/config.py b/vetclinic/config.py
+index 61a9730..38cf35c 100644
+--- a/vetclinic/config.py
++++ b/vetclinic/config.py
+@@ -19,6 +19,10 @@ DATETIME_PATTERN = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$"
+ CONSULTATION_DESCRIPTION = "Consulta"
+ CONSULTATION_PRICE_IN_CENTS = 15000
+ 
++# Plano de fidelidade dos tutores e percentual de desconto (sobre a consulta) de cada um.
++DEFAULT_LOYALTY_PLAN = "nenhum"
++CONSULTATION_DISCOUNT_PERCENT_BY_PLAN = {"nenhum": 0, "prata": 10, "ouro": 20}
++
+ 
+ @dataclass(frozen=True)
+ class Settings:
+diff --git a/vetclinic/database.py b/vetclinic/database.py
+index 7b838dc..cd817fc 100644
+--- a/vetclinic/database.py
++++ b/vetclinic/database.py
+@@ -12,7 +12,8 @@ DATABASE_SCHEMA_STATEMENTS = (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         nome TEXT NOT NULL,
+         email TEXT NOT NULL,
+-        telefone TEXT
++        telefone TEXT,
++        plano TEXT NOT NULL DEFAULT 'nenhum'
+     )
+     """,
+     """
+@@ -76,7 +77,8 @@ DATABASE_SCHEMA_STATEMENTS = (
+         id INTEGER PRIMARY KEY AUTOINCREMENT,
+         tutor_id INTEGER NOT NULL REFERENCES tutores(id),
+         atendimento_id INTEGER REFERENCES atendimentos(id),
+-        status TEXT NOT NULL
++        status TEXT NOT NULL,
++        desconto_centavos INTEGER NOT NULL DEFAULT 0
+     )
+     """,
+     # O total da fatura não é armazenado: é sempre derivado dos itens.
+@@ -92,6 +94,13 @@ DATABASE_SCHEMA_STATEMENTS = (
+ )
+ 
+ 
++# Colunas acrescentadas após a criação inicial do esquema: (tabela, coluna, definição).
++DATABASE_ADDED_COLUMNS = (
++    ("tutores", "plano", "TEXT NOT NULL DEFAULT 'nenhum'"),
++    ("faturas", "desconto_centavos", "INTEGER NOT NULL DEFAULT 0"),
++)
++
++
+ def open_connection(database_path: str) -> sqlite3.Connection:
+     """Abre uma conexão configurada para controle manual de transações.
+ 
+@@ -117,6 +126,10 @@ def initialize_schema(database_path: str) -> None:
+     try:
+         for statement in DATABASE_SCHEMA_STATEMENTS:
+             connection.execute(statement)
++        for table, column, definition in DATABASE_ADDED_COLUMNS:
++            existing = {row["name"] for row in connection.execute(f"PRAGMA table_info({table})")}
++            if column not in existing:
++                connection.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+     finally:
+         connection.close()
+ 
+diff --git a/vetclinic/repositories/faturas.py b/vetclinic/repositories/faturas.py
+index 679552f..7736194 100644
+--- a/vetclinic/repositories/faturas.py
++++ b/vetclinic/repositories/faturas.py
+@@ -13,11 +13,13 @@ def insert_invoice(
+     treatment_id: int | None,
+     status: str,
+     items: list[Row],
++    discount_in_cents: int = 0,
+ ) -> int:
+     """Insere uma fatura com seus itens iniciais e devolve o id gerado."""
+     cursor = connection.execute(
+-        "INSERT INTO faturas (tutor_id, atendimento_id, status) VALUES (?, ?, ?)",
+-        (tutor_id, treatment_id, status),
++        "INSERT INTO faturas (tutor_id, atendimento_id, status, desconto_centavos)"
++        " VALUES (?, ?, ?, ?)",
++        (tutor_id, treatment_id, status, discount_in_cents),
+     )
+     invoice_id = int(cursor.lastrowid)
+     for item in items:
+diff --git a/vetclinic/repositories/tutores.py b/vetclinic/repositories/tutores.py
+index 982c9a6..4422c30 100644
+--- a/vetclinic/repositories/tutores.py
++++ b/vetclinic/repositories/tutores.py
+@@ -39,3 +39,8 @@ def update_tutor(
+ def delete_tutor(connection: sqlite3.Connection, tutor_id: int) -> None:
+     """Remove um tutor."""
+     connection.execute("DELETE FROM tutores WHERE id = ?", (tutor_id,))
++
++
++def update_tutor_plan(connection: sqlite3.Connection, tutor_id: int, plan: str) -> None:
++    """Altera o plano de fidelidade de um tutor."""
++    connection.execute("UPDATE tutores SET plano = ? WHERE id = ?", (plan, tutor_id))
+diff --git a/vetclinic/routers/tutores.py b/vetclinic/routers/tutores.py
+index f0a521b..b2aa2f8 100644
+--- a/vetclinic/routers/tutores.py
++++ b/vetclinic/routers/tutores.py
+@@ -5,7 +5,12 @@ from fastapi import APIRouter, Response, status
+ from vetclinic.routers import ConnectionDependency
+ from vetclinic.schemas.faturas import InvoiceOutput
+ from vetclinic.schemas.pets import PetOutput
+-from vetclinic.schemas.tutores import TutorInput, TutorOutput
++from vetclinic.schemas.tutores import (
++    TutorInput,
++    TutorOutput,
++    TutorPlanInput,
++    TutorPlanOutput,
++)
+ from vetclinic.services import tutores as tutor_service
+ 
+ router = APIRouter(prefix="/tutores", tags=["tutores"])
+@@ -52,3 +57,17 @@ def list_pets_of_tutor(tutor_id: int, connection: ConnectionDependency):
+ def list_invoices_of_tutor(tutor_id: int, connection: ConnectionDependency):
+     """Lista as faturas de um tutor."""
+     return tutor_service.list_invoices_of_tutor(connection, tutor_id)
++
++
++@router.get("/{tutor_id}/plano", response_model=TutorPlanOutput)
++def get_plan_of_tutor(tutor_id: int, connection: ConnectionDependency):
++    """Consulta o plano de fidelidade de um tutor."""
++    return tutor_service.get_plan_of_tutor(connection, tutor_id)
++
++
++@router.put("/{tutor_id}/plano", response_model=TutorPlanOutput)
++def replace_plan_of_tutor(
++    tutor_id: int, data: TutorPlanInput, connection: ConnectionDependency
++):
++    """Altera o plano de fidelidade de um tutor."""
++    return tutor_service.replace_plan_of_tutor(connection, tutor_id, data)
+diff --git a/vetclinic/schemas/faturas.py b/vetclinic/schemas/faturas.py
+index 481ca39..47a9787 100644
+--- a/vetclinic/schemas/faturas.py
++++ b/vetclinic/schemas/faturas.py
+@@ -35,3 +35,4 @@ class InvoiceOutput(BaseModel):
+     status: InvoiceStatus
+     itens: list[InvoiceItemOutput]
+     total_centavos: int
++    desconto_centavos: int
+diff --git a/vetclinic/schemas/tutores.py b/vetclinic/schemas/tutores.py
+index ff45d77..9d64826 100644
+--- a/vetclinic/schemas/tutores.py
++++ b/vetclinic/schemas/tutores.py
+@@ -1,5 +1,7 @@
+ """Schemas de tutores."""
+ 
++from typing import Literal
++
+ from pydantic import BaseModel
+ 
+ from vetclinic.validation import EmailText, NonBlankText
+@@ -17,3 +19,18 @@ class TutorOutput(TutorInput):
+     """Tutor retornado pela API."""
+ 
+     id: int
++
++
++LoyaltyPlan = Literal["nenhum", "prata", "ouro"]
++
++
++class TutorPlanInput(BaseModel):
++    """Corpo de alteração do plano de fidelidade de um tutor."""
++
++    plano: LoyaltyPlan
++
++
++class TutorPlanOutput(TutorPlanInput):
++    """Plano de fidelidade retornado pela API."""
++
++    tutor_id: int
+diff --git a/vetclinic/services/faturas.py b/vetclinic/services/faturas.py
+index 8ee12cf..0c2d983 100644
+--- a/vetclinic/services/faturas.py
++++ b/vetclinic/services/faturas.py
+@@ -2,11 +2,16 @@
+ 
+ import sqlite3
+ 
+-from vetclinic.config import CONSULTATION_DESCRIPTION, CONSULTATION_PRICE_IN_CENTS
++from vetclinic.config import (
++    CONSULTATION_DESCRIPTION,
++    CONSULTATION_DISCOUNT_PERCENT_BY_PLAN,
++    CONSULTATION_PRICE_IN_CENTS,
++)
+ from vetclinic.database import transaction
+ from vetclinic.errors import ResourceNotFoundError, StateConflictError
+ from vetclinic.repositories import Row
+ from vetclinic.repositories import faturas as invoice_repository
++from vetclinic.repositories import tutores as tutor_repository
+ from vetclinic.schemas.faturas import InvoiceItemInput
+ 
+ INVOICE_STATUS_OPEN = "aberta"
+@@ -31,7 +36,7 @@ def build_consultation_item() -> Row:
+ 
+ 
+ def add_totals_to_invoice(invoice: Row) -> Row:
+-    """Devolve a fatura com o total de cada item e o total geral calculados."""
++    """Devolve a fatura com o total de cada item e o total geral (já com desconto)."""
+     items_with_totals = [
+         {**item, "total_centavos": item["quantidade"] * item["valor_unitario_centavos"]}
+         for item in invoice["itens"]
+@@ -39,16 +44,34 @@ def add_totals_to_invoice(invoice: Row) -> Row:
+     return {
+         **invoice,
+         "itens": items_with_totals,
+-        "total_centavos": sum(item["total_centavos"] for item in items_with_totals),
++        "total_centavos": sum(item["total_centavos"] for item in items_with_totals)
++        - invoice["desconto_centavos"],
+     }
+ 
+ 
++def _consultation_discount(connection: sqlite3.Connection, tutor_id: int, items: list[Row]) -> int:
++    """Desconto do plano do tutor sobre o item de consulta, arredondado para baixo."""
++    plan = tutor_repository.find_tutor_by_id(connection, tutor_id)["plano"]
++    percent = CONSULTATION_DISCOUNT_PERCENT_BY_PLAN[plan]
++    consultation_total = sum(
++        item["quantidade"] * item["valor_unitario_centavos"]
++        for item in items
++        if item["descricao"] == CONSULTATION_DESCRIPTION
++    )
++    return consultation_total * percent // 100
++
++
+ def create_invoice_for_treatment(
+     connection: sqlite3.Connection, tutor_id: int, treatment_id: int, items: list[Row]
+ ) -> int:
+     """Cria a fatura aberta de um atendimento. Deve rodar dentro da transação do chamador."""
+     return invoice_repository.insert_invoice(
+-        connection, tutor_id, treatment_id, INVOICE_STATUS_OPEN, items
++        connection,
++        tutor_id,
++        treatment_id,
++        INVOICE_STATUS_OPEN,
++        items,
++        _consultation_discount(connection, tutor_id, items),
+     )
+ 
+ 
+diff --git a/vetclinic/services/tutores.py b/vetclinic/services/tutores.py
+index 9d470cb..41e6d28 100644
+--- a/vetclinic/services/tutores.py
++++ b/vetclinic/services/tutores.py
+@@ -6,7 +6,7 @@ from vetclinic.errors import ResourceNotFoundError, StateConflictError
+ from vetclinic.repositories import Row, faturas as invoice_repository
+ from vetclinic.repositories import pets as pet_repository
+ from vetclinic.repositories import tutores as tutor_repository
+-from vetclinic.schemas.tutores import TutorInput
++from vetclinic.schemas.tutores import TutorInput, TutorPlanInput
+ from vetclinic.services.faturas import add_totals_to_invoice
+ 
+ TUTOR_NOT_FOUND_MESSAGE = "Tutor não encontrado"
+@@ -58,3 +58,18 @@ def list_invoices_of_tutor(connection: sqlite3.Connection, tutor_id: int) -> lis
+     get_tutor_or_raise(connection, tutor_id)
+     invoices = invoice_repository.list_invoices_of_tutor(connection, tutor_id)
+     return [add_totals_to_invoice(invoice) for invoice in invoices]
++
++
++def get_plan_of_tutor(connection: sqlite3.Connection, tutor_id: int) -> Row:
++    """Devolve o plano de fidelidade de um tutor existente."""
++    tutor = get_tutor_or_raise(connection, tutor_id)
++    return {"tutor_id": tutor_id, "plano": tutor["plano"]}
++
++
++def replace_plan_of_tutor(
++    connection: sqlite3.Connection, tutor_id: int, data: TutorPlanInput
++) -> Row:
++    """Altera o plano de fidelidade de um tutor existente."""
++    get_tutor_or_raise(connection, tutor_id)
++    tutor_repository.update_tutor_plan(connection, tutor_id, data.plano)
++    return get_plan_of_tutor(connection, tutor_id)

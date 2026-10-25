@@ -1,0 +1,121 @@
+diff --git a/atendimentos.py b/atendimentos.py
+index c2f43c9..bd377d1 100644
+--- a/atendimentos.py
++++ b/atendimentos.py
+@@ -9,10 +9,12 @@ import agendamentos
+ import faturas
+ import pets
+ import produtos
++import tutores
+ 
+ router = APIRouter(tags=["atendimentos"])
+ 
+ VALOR_CONSULTA_CENTAVOS = 15000
++DESCONTO_PERCENTUAL = {"nenhum": 0, "prata": 10, "ouro": 20}
+ 
+ 
+ class ProdutoUsado(BaseModel):
+@@ -52,7 +54,9 @@ def registrar(id: int, body: AtendimentoIn):
+         enviados = [p.model_dump() for p in body.produtos]
+         at_id = inserir(c, "INSERT INTO atendimentos(agendamento_id,anotacoes,produtos_json) VALUES(?,?,?)",
+                         id, body.anotacoes, json.dumps(enviados))
+-        fatura_id = inserir(c, "INSERT INTO faturas(tutor_id,atendimento_id,status) VALUES(?,?,'aberta')", tutor_id, at_id)
++        desconto = VALOR_CONSULTA_CENTAVOS * DESCONTO_PERCENTUAL[tutores.plano_do(c, tutor_id)] // 100
++        fatura_id = inserir(c, "INSERT INTO faturas(tutor_id,atendimento_id,status,desconto_centavos) VALUES(?,?,'aberta',?)",
++                            tutor_id, at_id, desconto)
+         faturas.adicionar_item(c, fatura_id, "Consulta", 1, VALOR_CONSULTA_CENTAVOS)
+         for p in body.produtos:
+             pr = prods[p.produto_id]
+diff --git a/db.py b/db.py
+index ced90f5..fe058b9 100644
+--- a/db.py
++++ b/db.py
+@@ -15,9 +15,10 @@ CREATE TABLE IF NOT EXISTS agendamentos (id INTEGER PRIMARY KEY AUTOINCREMENT, p
+ CREATE TABLE IF NOT EXISTS atendimentos (id INTEGER PRIMARY KEY AUTOINCREMENT, agendamento_id INTEGER NOT NULL REFERENCES agendamentos(id),
+     anotacoes TEXT NOT NULL, produtos_json TEXT NOT NULL);
+ CREATE TABLE IF NOT EXISTS faturas (id INTEGER PRIMARY KEY AUTOINCREMENT, tutor_id INTEGER NOT NULL REFERENCES tutores(id),
+-    atendimento_id INTEGER, status TEXT NOT NULL);
++    atendimento_id INTEGER, status TEXT NOT NULL, desconto_centavos INTEGER NOT NULL DEFAULT 0);
+ CREATE TABLE IF NOT EXISTS fatura_itens (id INTEGER PRIMARY KEY AUTOINCREMENT, fatura_id INTEGER NOT NULL REFERENCES faturas(id),
+     descricao TEXT NOT NULL, quantidade INTEGER NOT NULL, valor_unitario_centavos INTEGER NOT NULL);
++CREATE TABLE IF NOT EXISTS tutor_planos (tutor_id INTEGER PRIMARY KEY REFERENCES tutores(id), plano TEXT NOT NULL);
+ """
+ 
+ 
+@@ -39,6 +40,9 @@ def db():
+ def iniciar():
+     with db() as c:
+         c.executescript(SCHEMA)
++        colunas = [r["name"] for r in c.execute("PRAGMA table_info(faturas)")]
++        if "desconto_centavos" not in colunas:  # banco criado antes do plano de fidelidade
++            c.execute("ALTER TABLE faturas ADD COLUMN desconto_centavos INTEGER NOT NULL DEFAULT 0")
+ 
+ 
+ def um(c, sql, *args):
+diff --git a/faturas.py b/faturas.py
+index d47990f..c98647c 100644
+--- a/faturas.py
++++ b/faturas.py
+@@ -25,7 +25,7 @@ def montar(c, id):
+     for i in itens:
+         i["total_centavos"] = i["quantidade"] * i["valor_unitario_centavos"]
+     f["itens"] = itens
+-    f["total_centavos"] = sum(i["total_centavos"] for i in itens)
++    f["total_centavos"] = sum(i["total_centavos"] for i in itens) - f["desconto_centavos"]
+     return f
+ 
+ 
+diff --git a/tutores.py b/tutores.py
+index d668159..cfd3194 100644
+--- a/tutores.py
++++ b/tutores.py
+@@ -1,3 +1,5 @@
++from typing import Literal
++
+ from fastapi import APIRouter, Response
+ from pydantic import BaseModel, field_validator
+ 
+@@ -21,6 +23,10 @@ class TutorIn(BaseModel):
+         return v
+ 
+ 
++class PlanoIn(BaseModel):
++    plano: Literal["nenhum", "prata", "ouro"]
++
++
+ def buscar(c, id):
+     return ou_404(um(c, "SELECT * FROM tutores WHERE id=?", id), "tutor")
+ 
+@@ -58,6 +64,7 @@ def remover(id: int):
+         buscar(c, id)
+         if um(c, "SELECT 1 FROM pets WHERE tutor_id=?", id):
+             erro(409, "tutor possui pets")
++        c.execute("DELETE FROM tutor_planos WHERE tutor_id=?", (id,))
+         c.execute("DELETE FROM tutores WHERE id=?", (id,))
+     return Response(status_code=204)
+ 
+@@ -75,3 +82,24 @@ def faturas_do_tutor(id: int):
+         buscar(c, id)
+         ids = [r["id"] for r in todos(c, "SELECT id FROM faturas WHERE tutor_id=? ORDER BY id", id)]
+         return [faturas.montar(c, i) for i in ids]
++
++
++def plano_do(c, id):
++    r = um(c, "SELECT plano FROM tutor_planos WHERE tutor_id=?", id)
++    return r["plano"] if r else "nenhum"
++
++
++@router.get("/{id}/plano")
++def obter_plano(id: int):
++    with db() as c:
++        buscar(c, id)
++        return {"tutor_id": id, "plano": plano_do(c, id)}
++
++
++@router.put("/{id}/plano")
++def atualizar_plano(id: int, body: PlanoIn):
++    with db() as c:
++        buscar(c, id)
++        c.execute("INSERT INTO tutor_planos(tutor_id,plano) VALUES(?,?) "
++                  "ON CONFLICT(tutor_id) DO UPDATE SET plano=excluded.plano", (id, body.plano))
++        return {"tutor_id": id, "plano": body.plano}

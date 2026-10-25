@@ -1,0 +1,9 @@
+Altere a política de cancelamento de agendamentos. Esta regra substitui a regra de cancelamento descrita em SPEC.md:
+
+- Faltando 12 horas ou mais entre o momento do cancelamento e o início: status "cancelado", sem custo.
+- Faltando menos de 12 horas: status "cancelado_tardio", e é gerada uma fatura de taxa para o tutor do pet:
+  - status "aberta", atendimento_id null;
+  - um único item: {"descricao": "Taxa de cancelamento tardio", "quantidade": 1, "valor_unitario_centavos": 5000, "total_centavos": 5000};
+  - total_centavos 5000.
+- A fatura de taxa aparece em GET /tutores/{id}/faturas e funciona como qualquer outra fatura (pode ser paga, etc.).
+- As demais regras de cancelamento continuam iguais (campo opcional "momento", 409 se não estiver "agendado", 404 se não existir).

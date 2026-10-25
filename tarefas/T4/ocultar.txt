@@ -1,0 +1,1 @@
+test_horarios_encostados_nao_conflitam

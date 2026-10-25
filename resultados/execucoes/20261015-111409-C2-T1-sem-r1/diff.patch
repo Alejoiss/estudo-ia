@@ -1,0 +1,97 @@
+diff --git a/main.py b/main.py
+index 9438b97..67356db 100644
+--- a/main.py
++++ b/main.py
+@@ -1,5 +1,5 @@
+ import json, os, sqlite3
+-from datetime import datetime, timedelta
++from datetime import date, datetime, timedelta
+ from typing import Annotated, Literal, Optional
+ from fastapi import FastAPI, HTTPException, Response
+ from pydantic import AfterValidator, BaseModel, StrictInt
+@@ -14,6 +14,7 @@ create table if not exists produtos(id integer primary key autoincrement, nome,
+ create table if not exists agendamentos(id integer primary key autoincrement, pet_id, veterinario_id, inicio, fim, duracao_minutos, status);
+ create table if not exists atendimentos(id integer primary key autoincrement, agendamento_id, anotacoes, produtos, fatura_id);
+ create table if not exists faturas(id integer primary key autoincrement, tutor_id, atendimento_id, status, itens);
++create table if not exists vacinas(id integer primary key autoincrement, pet_id, veterinario_id, nome_vacina, data_aplicacao, intervalo_reforco_dias, data_reforco);
+ """)
+ app = FastAPI()
+ DT = "%Y-%m-%dT%H:%M"
+@@ -113,6 +114,14 @@ class EntradaIn(BaseModel):
+     quantidade: Qty
+ 
+ 
++class VacinaIn(BaseModel):
++    pet_id: StrictInt
++    veterinario_id: StrictInt
++    nome_vacina: Str
++    data_aplicacao: Annotated[Day, AfterValidator(not_future)]
++    intervalo_reforco_dias: Qty
++
++
+ class AgendIn(BaseModel):
+     pet_id: StrictInt
+     veterinario_id: StrictInt
+@@ -205,6 +214,8 @@ async def delete_pet(id: int):
+     get("pets", id)
+     if db.execute("select 1 from agendamentos where pet_id=?", (id,)).fetchone():
+         err(409, "pet possui agendamentos")
++    if db.execute("select 1 from vacinas where pet_id=?", (id,)).fetchone():
++        err(409, "pet possui vacinas")
+     db.execute("delete from pets where id=?", (id,))
+     db.commit()
+     return Response(status_code=204)
+@@ -227,6 +238,53 @@ async def read_vet(id: int):
+     return get("veterinarios", id)
+ 
+ 
++def vacina_data(body):
++    get("pets", body.pet_id)
++    get("veterinarios", body.veterinario_id)
++    try:
++        reforco = date.fromisoformat(body.data_aplicacao) + timedelta(days=body.intervalo_reforco_dias)
++    except OverflowError:
++        err(422, "data_reforco fora do intervalo")
++    return {**body.model_dump(), "data_reforco": reforco.isoformat()}
++
++
++@app.post("/vacinas", status_code=201)
++async def create_vacina(body: VacinaIn):
++    return insert("vacinas", vacina_data(body))
++
++
++@app.get("/vacinas/reforcos-pendentes")
++async def reforcos_pendentes(ate: Day):
++    rows = db.execute("select * from vacinas where data_reforco<=? order by data_reforco, id", (ate,))
++    return [dict(row) for row in rows]
++
++
++@app.get("/vacinas/{id}")
++async def read_vacina(id: int):
++    return get("vacinas", id)
++
++
++@app.put("/vacinas/{id}")
++async def put_vacina(id: int, body: VacinaIn):
++    get("vacinas", id)
++    return update("vacinas", id, vacina_data(body))
++
++
++@app.delete("/vacinas/{id}", status_code=204)
++async def delete_vacina(id: int):
++    get("vacinas", id)
++    db.execute("delete from vacinas where id=?", (id,))
++    db.commit()
++    return Response(status_code=204)
++
++
++@app.get("/pets/{id}/vacinas")
++async def pet_vacinas(id: int):
++    get("pets", id)
++    rows = db.execute("select * from vacinas where pet_id=? order by data_aplicacao desc, id", (id,))
++    return [dict(row) for row in rows]
++
++
+ @app.post("/produtos", status_code=201)
+ async def create_produto(body: ProdutoIn):
+     return insert("produtos", body.model_dump())

@@ -1,0 +1,89 @@
+diff --git a/main.py b/main.py
+index 9438b97..c640e11 100644
+--- a/main.py
++++ b/main.py
+@@ -13,11 +13,16 @@ create table if not exists veterinarios(id integer primary key autoincrement, no
+ create table if not exists produtos(id integer primary key autoincrement, nome, preco_centavos, estoque, estoque_minimo);
+ create table if not exists agendamentos(id integer primary key autoincrement, pet_id, veterinario_id, inicio, fim, duracao_minutos, status);
+ create table if not exists atendimentos(id integer primary key autoincrement, agendamento_id, anotacoes, produtos, fatura_id);
+-create table if not exists faturas(id integer primary key autoincrement, tutor_id, atendimento_id, status, itens);
++create table if not exists faturas(id integer primary key autoincrement, tutor_id, atendimento_id, status, itens, desconto_centavos integer default 0);
++create table if not exists planos(tutor_id integer primary key, plano);
+ """)
++if "desconto_centavos" not in [col["name"] for col in db.execute("pragma table_info(faturas)")]:
++    db.execute("alter table faturas add column desconto_centavos integer default 0")
++    db.commit()
+ app = FastAPI()
+ DT = "%Y-%m-%dT%H:%M"
+ CONSULTA = 15000
++DESCONTOS = {"nenhum": 0, "prata": 10, "ouro": 20}
+ 
+ 
+ def err(code, msg):
+@@ -113,6 +118,10 @@ class EntradaIn(BaseModel):
+     quantidade: Qty
+ 
+ 
++class PlanoIn(BaseModel):
++    plano: Literal["nenhum", "prata", "ouro"]
++
++
+ class AgendIn(BaseModel):
+     pet_id: StrictInt
+     veterinario_id: StrictInt
+@@ -166,6 +175,7 @@ async def delete_tutor(id: int):
+     if db.execute("select 1 from pets where tutor_id=?", (id,)).fetchone():
+         err(409, "tutor possui pets")
+     db.execute("delete from tutores where id=?", (id,))
++    db.execute("delete from planos where tutor_id=?", (id,))
+     db.commit()
+     return Response(status_code=204)
+ 
+@@ -182,6 +192,25 @@ async def tutor_faturas(id: int):
+     return [fatura(dict(row)) for row in db.execute("select * from faturas where tutor_id=? order by id", (id,))]
+ 
+ 
++def plano_tutor(id):
++    row = db.execute("select plano from planos where tutor_id=?", (id,)).fetchone()
++    return {"tutor_id": id, "plano": row["plano"] if row else "nenhum"}
++
++
++@app.get("/tutores/{id}/plano")
++async def read_plano(id: int):
++    get("tutores", id)
++    return plano_tutor(id)
++
++
++@app.put("/tutores/{id}/plano")
++async def put_plano(id: int, body: PlanoIn):
++    get("tutores", id)
++    db.execute("insert or replace into planos(tutor_id, plano) values(?,?)", (id, body.plano))
++    db.commit()
++    return plano_tutor(id)
++
++
+ @app.post("/pets", status_code=201)
+ async def create_pet(body: PetIn):
+     get("tutores", body.tutor_id)
+@@ -305,7 +334,7 @@ async def cancel_agend(id: int, body: Optional[CancelIn] = None):
+ 
+ def fatura(row):
+     row["itens"] = json.loads(row["itens"])
+-    row["total_centavos"] = sum(item["total_centavos"] for item in row["itens"])
++    row["total_centavos"] = sum(item["total_centavos"] for item in row["itens"]) - row["desconto_centavos"]
+     return row
+ 
+ 
+@@ -336,9 +365,10 @@ async def create_atend(id: int, body: AtendIn):
+         "insert into atendimentos(agendamento_id, anotacoes, produtos) values(?,?,?)",
+         (id, body.anotacoes, json.dumps([uso.model_dump() for uso in body.produtos])),
+     ).lastrowid
++    desconto = CONSULTA * DESCONTOS[plano_tutor(tutor_id)["plano"]] // 100
+     fat = db.execute(
+-        "insert into faturas(tutor_id, atendimento_id, status, itens) values(?,?,'aberta',?)",
+-        (tutor_id, atend, json.dumps(itens)),
++        "insert into faturas(tutor_id, atendimento_id, status, itens, desconto_centavos) values(?,?,'aberta',?,?)",
++        (tutor_id, atend, json.dumps(itens), desconto),
+     ).lastrowid
+     db.execute("update atendimentos set fatura_id=? where id=?", (fat, atend))
+     db.commit()

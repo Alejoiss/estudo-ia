@@ -1,0 +1,6 @@
+Você está trabalhando no repositório atual: uma API FastAPI de clínica veterinária, especificada em SPEC.md.
+Rode os testes com ./test.sh. Siga as convenções existentes do projeto.
+Não altere SPEC.md, run.sh, test.sh, requirements.txt nem tests/acceptance/.
+Ao terminar, todos os testes existentes devem continuar passando.
+
+Tarefa:

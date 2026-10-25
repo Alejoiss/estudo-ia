@@ -1,0 +1,13 @@
+diff --git a/main.py b/main.py
+index 6d08b0c..9438b97 100644
+--- a/main.py
++++ b/main.py
+@@ -269,7 +269,7 @@ async def create_agend(body: AgendIn):
+         err(422, "fora do expediente")
+     fim = end.strftime(DT)
+     if db.execute(
+-        "select 1 from agendamentos where veterinario_id=? and status in ('agendado','concluido') and inicio<=? and fim>=?",
++        "select 1 from agendamentos where veterinario_id=? and status in ('agendado','concluido') and inicio<? and fim>?",
+         (body.veterinario_id, fim, body.inicio),
+     ).fetchone():
+         err(409, "conflito de agenda")
